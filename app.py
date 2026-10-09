@@ -110,10 +110,12 @@ GMAIL_APP_PASSWORD = get_secret("GMAIL_APP_PASSWORD", "")
 # ---------------------------------------------------------
 def send_email(to_address: str, subject: str, body: str, sender_email: str = None, sender_password: str = None):
     """
-    Sends an email using Python's built-in smtplib over SSL via Gmail SMTP.
+    Sends an email using Python's built-in smtplib over SSL/TLS via Gmail SMTP.
+    Automatically handles whitespace in 16-character App Passwords.
     """
-    from_address = sender_email or GMAIL_ADDRESS
-    app_password = sender_password or GMAIL_APP_PASSWORD
+    from_address = (sender_email or GMAIL_ADDRESS).strip()
+    # Google generates App Passwords with spaces (e.g. 'xxxx yyyy zzzz wwww')
+    app_password = (sender_password or GMAIL_APP_PASSWORD).replace(" ", "").strip()
 
     if not from_address or not app_password:
         raise ValueError("Missing Gmail address or App Password. Please configure secrets or sidebar settings.")
@@ -125,9 +127,24 @@ def send_email(to_address: str, subject: str, body: str, sender_email: str = Non
 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(from_address, app_password)
-        server.send_message(msg)
+    # Try Port 465 (SSL) first, then fallback to Port 587 (STARTTLS)
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            server.login(from_address, app_password)
+            server.send_message(msg)
+    except Exception:
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(from_address, app_password)
+                server.send_message(msg)
+        except Exception as auth_err:
+            raise RuntimeError(
+                f"Gmail authentication failed: {auth_err}. "
+                "Note: Gmail requires a 16-character Google App Password generated at https://myaccount.google.com/apppasswords (personal account passwords are not accepted by Google SMTP)."
+            )
 
 # ---------------------------------------------------------
 # Sidebar: User Profile & API Settings
@@ -295,7 +312,7 @@ with tab_scan:
                     genai.configure(api_key=GEMINI_API_KEY)
                     # Use gemini-1.5-flash for fast and accurate multimodal processing
                     model = genai.GenerativeModel(
-                        model_name="gemini-1.5-flash",
+                        model_name="gemini-3.8-flash",
                         system_instruction=SYSTEM_PROMPT
                     )
 
@@ -378,7 +395,7 @@ if send_email_clicked:
                     chat_context = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
 
                 genai.configure(api_key=GEMINI_API_KEY)
-                digest_model = genai.GenerativeModel("gemini-1.5-flash")
+                digest_model = genai.GenerativeModel("gemini-3.8-flash")
                 
                 prompt_content = DIGEST_PROMPT_TEMPLATE.format(
                     student_name=st.session_state.student_name,
@@ -445,7 +462,7 @@ with tab_chat:
                     try:
                         genai.configure(api_key=GEMINI_API_KEY)
                         chat_model = genai.GenerativeModel(
-                            model_name="gemini-1.5-flash",
+                            model_name="gemini-3.8-flash",
                             system_instruction=SYSTEM_PROMPT
                         )
 
